@@ -124,15 +124,32 @@ async def query_ollama_cloud(messages: List[Dict[str, str]]) -> str:
 
 
 @mcp.tool()
-async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = None, synthesize_consensus: bool = False, model_roles: Optional[Dict[str, str]] = None, target_models: Optional[List[str]] = None) -> str:
+async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = None, synthesize_consensus: bool = False, model_roles: Optional[Dict[str, str]] = None, target_models: Optional[List[str]] = None, files: Optional[List[str]] = None) -> str:
     """Consult other AI models (ChatGPT, Claude, Gemini) for their perspectives. 
     Use history parameter for conversational memory (list of dicts with 'role' and 'content').
     Set synthesize_consensus to True for the models to do a second round of debate and provide a final synthesis.
     Use model_roles to assign personas (e.g. {"openai": "Devil's Advocate"}). Valid keys: openai, anthropic, gemini, ollama_local, ollama_secondary.
-    Use target_models to route the query to specific models only (e.g. ["ollama_local", "gemini"]). If None, queries all models."""
+    Use target_models to route the query to specific models only (e.g. ["ollama_local", "gemini"]). If None, queries all models.
+    Use files to pass an array of absolute file paths. The council will read and review their contents."""
     
     if history is None:
         history = []
+        
+    file_contents = ""
+    if files:
+        for file_path in files:
+            if os.path.exists(file_path):
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                        file_contents += f"\n\n--- Content of {os.path.basename(file_path)} ---\n{content}\n"
+                except Exception as e:
+                    file_contents += f"\n\n--- Could not read {file_path}: {str(e)} ---\n"
+            else:
+                file_contents += f"\n\n--- File not found: {file_path} ---\n"
+                
+    if file_contents:
+        query = f"{query}\n\nHere are the attached files for context:{file_contents}"
         
     messages = history.copy()
     messages.append({"role": "user", "content": query})
