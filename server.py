@@ -229,15 +229,25 @@ async def consult_council(query: str, ctx: Context = None, history: Optional[Lis
     disable_local = os.getenv("DISABLE_LOCAL", "").lower() == "true"
     disable_cloud = os.getenv("DISABLE_CLOUD", "").lower() == "true"
     
+    import sys
+    
     if ctx:
         ctx.info("🏛️ The AI Council is assembling...")
+    sys.stderr.write("🏛️ The AI Council is assembling...\n")
+    sys.stderr.flush()
         
     async def fetch_and_notify(model_name: str, coro):
         if ctx:
             ctx.info(f"🧠 [{model_name}] started thinking...")
+        sys.stderr.write(f"🧠 [{model_name}] started thinking...\n")
+        sys.stderr.flush()
+        
         result = await coro
+        
         if ctx:
             ctx.info(f"✅ [{model_name}] has delivered its perspective!")
+        sys.stderr.write(f"✅ [{model_name}] has delivered its perspective!\n")
+        sys.stderr.flush()
         return result
     
     # Phase 1: Run queries in parallel
@@ -294,6 +304,8 @@ async def consult_council(query: str, ctx: Context = None, history: Optional[Lis
         
         if ctx:
             ctx.info("⚖️ The Council is reviewing all perspectives for synthesis...")
+        sys.stderr.write("⚖️ The Council is reviewing all perspectives for synthesis...\n")
+        sys.stderr.flush()
             
         synthesis_tasks = []
         if (target_models is None or "openai" in target_models) and not disable_cloud:
