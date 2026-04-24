@@ -1,6 +1,7 @@
 import os
 import asyncio
 import httpx
+from typing import List, Dict, Optional
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
 
@@ -10,7 +11,7 @@ load_dotenv()
 # Initialize FastMCP server
 mcp = FastMCP("LLM Council")
 
-async def query_openai(prompt: str) -> str:
+async def query_openai(messages: List[Dict[str, str]]) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return None
@@ -18,7 +19,7 @@ async def query_openai(prompt: str) -> str:
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     data = {
         "model": "gpt-4o",
-        "messages": [{"role": "user", "content": prompt}]
+        "messages": messages
     }
     async with httpx.AsyncClient() as client:
         try:
@@ -28,7 +29,7 @@ async def query_openai(prompt: str) -> str:
         except Exception as e:
             return f"### OpenAI Error\n{str(e)}"
 
-async def query_anthropic(prompt: str) -> str:
+async def query_anthropic(messages: List[Dict[str, str]]) -> str:
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         return None
@@ -41,7 +42,7 @@ async def query_anthropic(prompt: str) -> str:
     data = {
         "model": "claude-3-7-sonnet-20250219",
         "max_tokens": 8192,
-        "messages": [{"role": "user", "content": prompt}]
+        "messages": messages
     }
     async with httpx.AsyncClient() as client:
         try:
@@ -51,15 +52,20 @@ async def query_anthropic(prompt: str) -> str:
         except Exception as e:
             return f"### Anthropic Error\n{str(e)}"
 
-async def query_gemini(prompt: str) -> str:
+async def query_gemini(messages: List[Dict[str, str]]) -> str:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return None
     
+    gemini_contents = []
+    for msg in messages:
+        role = "model" if msg["role"] == "assistant" else "user"
+        gemini_contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+        
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
     data = {
-        "contents": [{"parts":[{"text": prompt}]}]
+        "contents": gemini_contents
     }
     async with httpx.AsyncClient() as client:
         try:
@@ -69,7 +75,7 @@ async def query_gemini(prompt: str) -> str:
         except Exception as e:
             return f"### Gemini Error\n{str(e)}"
 
-async def query_ollama(prompt: str) -> str:
+async def query_ollama(messages: List[Dict[str, str]]) -> str:
     model = os.getenv("OLLAMA_MODEL")
     if not model:
         return None
@@ -78,7 +84,7 @@ async def query_ollama(prompt: str) -> str:
     url = f"{host.rstrip('/')}/api/chat"
     data = {
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages,
         "stream": False
     }
     async with httpx.AsyncClient() as client:
@@ -89,7 +95,7 @@ async def query_ollama(prompt: str) -> str:
         except Exception as e:
             return f"### Ollama Error\n{str(e)}"
 
-async def query_ollama_cloud(prompt: str) -> str:
+async def query_ollama_cloud(messages: List[Dict[str, str]]) -> str:
     model = os.getenv("OLLAMA_CLOUD_MODEL")
     if not model:
         return None
@@ -99,11 +105,10 @@ async def query_ollama_cloud(prompt: str) -> str:
     url = f"{host.rstrip('/')}/api/chat"
     data = {
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages,
         "stream": False
     }
     
-    # Check if there are specific auth headers for cloud (like Bearer tokens)
     headers = {}
     auth_token = os.getenv("OLLAMA_CLOUD_AUTH")
     if auth_token:
@@ -117,17 +122,26 @@ async def query_ollama_cloud(prompt: str) -> str:
         except Exception as e:
             return f"### Ollama Secondary Error\n{str(e)}"
 
+
 @mcp.tool()
-async def consult_council(query: str) -> str:
-    """Consult other AI models (ChatGPT, Claude, Gemini) for their perspectives. Use this when you want to brainstorm or get second opinions."""
+async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = None, synthesize_consensus: bool = False) -> str:
+    """Consult other AI models (ChatGPT, Claude, Gemini) for their perspectives. 
+    Use history parameter for conversational memory (list of dicts with 'role' and 'content').
+    Set synthesize_consensus to True for the models to do a second round of debate and provide a final synthesis."""
     
-    # Run queries in parallel
+    if history is None:
+        history = []
+        
+    messages = history.copy()
+    messages.append({"role": "user", "content": query})
+    
+    # Phase 1: Run queries in parallel
     tasks = [
-        query_openai(query),
-        query_anthropic(query),
-        query_gemini(query),
-        query_ollama(query),
-        query_ollama_cloud(query)
+        query_openai(messages),
+        query_anthropic(messages),
+        query_gemini(messages),
+        query_ollama(messages),
+        query_ollama_cloud(messages)
     ]
     results = await asyncio.gather(*tasks)
     
@@ -137,8 +151,36 @@ async def consult_council(query: str) -> str:
     if not valid_results:
         return "Error: No API keys or models configured! Please set OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, OLLAMA_MODEL, or OLLAMA_CLOUD_MODEL in the .env file."
         
-    return f"Here are the perspectives from the council:\n\n" + "\n\n---\n\n".join(valid_results)
-
+    combined_perspectives = "Here are the initial perspectives from the council:\n\n" + "\n\n---\n\n".join(valid_results)
+    
+    # Phase 2: Synthesis / Cross-talk (if requested)
+    if synthesize_consensus and len(valid_results) > 1:
+        consensus_prompt = (
+            "You are participating in an AI council debate. A user asked the following query:\n"
+            f"<query>\n{query}\n</query>\n\n"
+            "Here are the perspectives provided by various AI models on the council:\n"
+            f"<perspectives>\n{combined_perspectives}\n</perspectives>\n\n"
+            "Please act as the council leader. Synthesize these perspectives, resolve any conflicts, and provide a final, definitive consensus answer to the user's query."
+        )
+        
+        # We append this follow-up as a new user message for the consensus round
+        synthesis_messages = messages.copy()
+        synthesis_messages[-1] = {"role": "user", "content": consensus_prompt}
+        
+        synthesis_tasks = [
+            query_openai(synthesis_messages),
+            query_anthropic(synthesis_messages),
+            query_gemini(synthesis_messages),
+            query_ollama(synthesis_messages),
+            query_ollama_cloud(synthesis_messages)
+        ]
+        synthesis_results = await asyncio.gather(*synthesis_tasks)
+        valid_synthesis = [r for r in synthesis_results if r is not None]
+        
+        final_output = combined_perspectives + "\n\n=================================\n### COUNCIL CONSENSUS ###\n=================================\n\n" + "\n\n---\n\n".join(valid_synthesis)
+        return final_output
+        
+    return combined_perspectives
 
 if __name__ == "__main__":
     mcp.run()
