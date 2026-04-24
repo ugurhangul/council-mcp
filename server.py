@@ -142,7 +142,7 @@ async def query_ollama_cloud(messages: List[Dict[str, str]]) -> str:
         except Exception as e:
             return f"### Ollama Secondary Error\n{str(e)}"
 
-async def query_nvidia(messages: List[Dict[str, str]], model: str) -> str:
+async def query_nvidia(messages: List[Dict[str, str]], model: str, thinking_mode: bool = True) -> str:
     api_key = os.getenv("NVIDIA_API_KEY")
     if not api_key:
         return None
@@ -158,18 +158,20 @@ async def query_nvidia(messages: List[Dict[str, str]], model: str) -> str:
         "stream": False
     }
     
-    # Apply specific reasoning kwargs based on the model family
-    if "deepseek" in model.lower():
-        data["chat_template_kwargs"] = {
-            "thinking": True,
-            "reasoning_effort": "high"
-        }
-    elif "glm" in model.lower():
-        data["chat_template_kwargs"] = {
-            "enable_thinking": True,
-            "clear_thinking": False
-        }
-    elif "mistral" in model.lower() or "devstral" in model.lower():
+    # Apply specific reasoning kwargs based on the model family if thinking mode is enabled
+    if thinking_mode:
+        if "deepseek" in model.lower():
+            data["chat_template_kwargs"] = {
+                "thinking": True,
+                "reasoning_effort": "high"
+            }
+        elif "glm" in model.lower():
+            data["chat_template_kwargs"] = {
+                "enable_thinking": True,
+                "clear_thinking": False
+            }
+            
+    if "mistral" in model.lower() or "devstral" in model.lower():
         data["max_tokens"] = 8192
         data["temperature"] = 0.15
         data["seed"] = 42
@@ -236,13 +238,14 @@ async def query_nvidia(messages: List[Dict[str, str]], model: str) -> str:
 
 
 @mcp.tool()
-async def consult_council(query: str, ctx: Context = None, history: Optional[List[Dict[str, str]]] = None, synthesize_consensus: bool = False, model_roles: Optional[Dict[str, str]] = None, target_models: Optional[List[str]] = None, files: Optional[List[str]] = None) -> str:
+async def consult_council(query: str, ctx: Context = None, history: Optional[List[Dict[str, str]]] = None, synthesize_consensus: bool = False, model_roles: Optional[Dict[str, str]] = None, target_models: Optional[List[str]] = None, files: Optional[List[str]] = None, thinking_mode: bool = True) -> str:
     """Consult other AI models (ChatGPT, Claude, Gemini, NVIDIA NIM) for their perspectives. 
     Use history parameter for conversational memory (list of dicts with 'role' and 'content').
     Set synthesize_consensus to True for the models to do a second round of debate and provide a final synthesis.
     Use model_roles to assign personas (e.g. {"openai": "Devil's Advocate"}). Valid keys: openai, anthropic, gemini, ollama_local, ollama_secondary, nvidia.
     Use target_models to route the query to specific models only (e.g. ["nvidia", "gemini"]). If None, queries all models.
-    Use files to pass an array of absolute file paths. The council will read and review their contents."""
+    Use files to pass an array of absolute file paths. The council will read and review their contents.
+    Use thinking_mode=False to explicitly disable reasoning passes on complex models like DeepSeek to dramatically speed up inference."""
     
     if history is None:
         history = []
@@ -339,7 +342,7 @@ async def consult_council(query: str, ctx: Context = None, history: Optional[Lis
     for i, model in enumerate(nvidia_models_list):
         slot_name = f"nvidia_{i+1}" if len(nvidia_models_list) > 1 else "nvidia"
         if (target_models is None or slot_name in target_models) and not disable_cloud:
-            tasks.append(fetch_and_notify(f"NVIDIA {model}", query_nvidia(get_messages_for_model(slot_name), model)))
+            tasks.append(fetch_and_notify(f"NVIDIA {model}", query_nvidia(get_messages_for_model(slot_name), model, thinking_mode)))
             
     if not tasks:
         return "Error: target_models list is empty or contains invalid model names."
@@ -389,7 +392,7 @@ async def consult_council(query: str, ctx: Context = None, history: Optional[Lis
         for i, model in enumerate(nvidia_models_list):
             slot_name = f"nvidia_{i+1}" if len(nvidia_models_list) > 1 else "nvidia"
             if (target_models is None or slot_name in target_models) and not disable_cloud:
-                synthesis_tasks.append(fetch_and_notify(f"NVIDIA {model} (Synthesis)", query_nvidia(synthesis_messages, model)))
+                synthesis_tasks.append(fetch_and_notify(f"NVIDIA {model} (Synthesis)", query_nvidia(synthesis_messages, model, thinking_mode)))
                 
         synthesis_results = await asyncio.gather(*synthesis_tasks)
         valid_synthesis = [r for r in synthesis_results if r is not None]
