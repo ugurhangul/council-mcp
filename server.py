@@ -89,6 +89,36 @@ async def query_ollama(prompt: str) -> str:
         except Exception as e:
             return f"### Ollama Error\n{str(e)}"
 
+async def query_ollama_cloud(prompt: str) -> str:
+    model = os.getenv("OLLAMA_CLOUD_MODEL")
+    if not model:
+        return None
+    
+    host = os.getenv("OLLAMA_CLOUD_HOST")
+    if not host:
+        return None
+        
+    url = f"{host.rstrip('/')}/api/chat"
+    data = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False
+    }
+    
+    # Check if there are specific auth headers for cloud (like Bearer tokens)
+    headers = {}
+    auth_token = os.getenv("OLLAMA_CLOUD_AUTH")
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
+        
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(url, headers=headers, json=data, timeout=90.0)
+            resp.raise_for_status()
+            return f"### Ollama Cloud ({model}) Perspective\n{resp.json()['message']['content']}"
+        except Exception as e:
+            return f"### Ollama Cloud Error\n{str(e)}"
+
 @mcp.tool()
 async def consult_council(query: str) -> str:
     """Consult other AI models (ChatGPT, Claude, Gemini) for their perspectives. Use this when you want to brainstorm or get second opinions."""
@@ -98,7 +128,8 @@ async def consult_council(query: str) -> str:
         query_openai(query),
         query_anthropic(query),
         query_gemini(query),
-        query_ollama(query)
+        query_ollama(query),
+        query_ollama_cloud(query)
     ]
     results = await asyncio.gather(*tasks)
     
@@ -106,7 +137,7 @@ async def consult_council(query: str) -> str:
     valid_results = [r for r in results if r is not None]
     
     if not valid_results:
-        return "Error: No API keys or models configured! Please set OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or OLLAMA_MODEL in the .env file."
+        return "Error: No API keys or models configured! Please set OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, OLLAMA_MODEL, or OLLAMA_CLOUD_MODEL in the .env file."
         
     return f"Here are the perspectives from the council:\n\n" + "\n\n---\n\n".join(valid_results)
 
