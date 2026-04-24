@@ -56,7 +56,7 @@ async def query_gemini(prompt: str) -> str:
     if not api_key:
         return None
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
     data = {
         "contents": [{"parts":[{"text": prompt}]}]
@@ -65,7 +65,7 @@ async def query_gemini(prompt: str) -> str:
         try:
             resp = await client.post(url, headers=headers, json=data, timeout=90.0)
             resp.raise_for_status()
-            return f"### Google (Gemini 2.5 Flash) Perspective\n{resp.json()['candidates'][0]['content']['parts'][0]['text']}"
+            return f"### Google (Gemini 3 Flash Preview) Perspective\n{resp.json()['candidates'][0]['content']['parts'][0]['text']}"
         except Exception as e:
             return f"### Gemini Error\n{str(e)}"
 
