@@ -209,7 +209,7 @@ async def query_nvidia(messages: List[Dict[str, str]], model: str, thinking_mode
                             
                             delta = chunk['choices'][0].get('delta', {})
                             
-                            reasoning = delta.get('reasoning_content', '')
+                            reasoning = delta.get('reasoning') or delta.get('reasoning_content', '')
                             if reasoning:
                                 reasoning_acc += reasoning
                                 sys.stderr.write(f"{_REASONING_COLOR}{reasoning}{_RESET_COLOR}")
