@@ -132,13 +132,12 @@ async def query_ollama_cloud(messages: List[Dict[str, str]]) -> str:
         except Exception as e:
             return f"### Ollama Secondary Error\n{str(e)}"
 
-async def query_nvidia(messages: List[Dict[str, str]]) -> str:
+async def query_nvidia(messages: List[Dict[str, str]], model: str) -> str:
     api_key = os.getenv("NVIDIA_API_KEY")
     if not api_key:
         return None
     
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    model = os.getenv("NVIDIA_MODEL", "deepseek-ai/deepseek-v4-pro")
     
     data = {
         "model": model,
@@ -239,9 +238,19 @@ async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = 
         tasks.append(query_ollama(get_messages_for_model("ollama_local")))
     if target_models is None or "ollama_secondary" in target_models:
         tasks.append(query_ollama_cloud(get_messages_for_model("ollama_secondary")))
-    if target_models is None or "nvidia" in target_models:
-        tasks.append(query_nvidia(get_messages_for_model("nvidia")))
         
+    nvidia_models_str = os.getenv("NVIDIA_MODELS")
+    nvidia_models_list = []
+    if nvidia_models_str:
+        nvidia_models_list = [m.strip() for m in nvidia_models_str.split(",") if m.strip()]
+    elif os.getenv("NVIDIA_MODEL"):
+        nvidia_models_list = [os.getenv("NVIDIA_MODEL")]
+        
+    for i, model in enumerate(nvidia_models_list):
+        slot_name = f"nvidia_{i+1}" if len(nvidia_models_list) > 1 else "nvidia"
+        if target_models is None or slot_name in target_models:
+            tasks.append(query_nvidia(get_messages_for_model(slot_name), model))
+            
     if not tasks:
         return "Error: target_models list is empty or contains invalid model names."
     results = await asyncio.gather(*tasks)
@@ -280,8 +289,12 @@ async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = 
             synthesis_tasks.append(query_ollama(synthesis_messages))
         if target_models is None or "ollama_secondary" in target_models:
             synthesis_tasks.append(query_ollama_cloud(synthesis_messages))
-        if target_models is None or "nvidia" in target_models:
-            synthesis_tasks.append(query_nvidia(synthesis_messages))
+            
+        for i, model in enumerate(nvidia_models_list):
+            slot_name = f"nvidia_{i+1}" if len(nvidia_models_list) > 1 else "nvidia"
+            if target_models is None or slot_name in target_models:
+                synthesis_tasks.append(query_nvidia(synthesis_messages, model))
+                
         synthesis_results = await asyncio.gather(*synthesis_tasks)
         valid_synthesis = [r for r in synthesis_results if r is not None]
         
@@ -315,8 +328,14 @@ async def check_health() -> str:
         
     # Check NVIDIA NIM
     if os.getenv("NVIDIA_API_KEY"):
-        nvidia_model = os.getenv("NVIDIA_MODEL", "deepseek-ai/deepseek-v4-pro")
-        status.append(f"✅ NVIDIA NIM: Configured ({nvidia_model})")
+        nvidia_models_str = os.getenv("NVIDIA_MODELS")
+        if nvidia_models_str:
+            models = [m.strip() for m in nvidia_models_str.split(",") if m.strip()]
+            for i, model in enumerate(models):
+                status.append(f"✅ NVIDIA NIM {i+1}: Configured ({model})")
+        else:
+            nvidia_model = os.getenv("NVIDIA_MODEL", "deepseek-ai/deepseek-v4-pro")
+            status.append(f"✅ NVIDIA NIM: Configured ({nvidia_model})")
     else:
         status.append("❌ NVIDIA NIM: Missing API Key")
         
