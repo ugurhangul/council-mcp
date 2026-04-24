@@ -12,6 +12,15 @@ load_dotenv()
 # Initialize FastMCP server
 mcp = FastMCP("LLM Council")
 
+LOG_FILE = os.path.join(os.path.dirname(__file__), "council_progress.md")
+
+def update_log(msg: str):
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(msg + "\n\n")
+    except Exception:
+        pass
+
 async def query_openai(messages: List[Dict[str, str]]) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -272,15 +281,8 @@ async def consult_council(query: str, ctx: Context = None, history: Optional[Lis
     disable_local = os.getenv("DISABLE_LOCAL", "").lower() == "true"
     disable_cloud = os.getenv("DISABLE_CLOUD", "").lower() == "true"
     
-    import sys
-    
-    log_file = os.path.join(os.path.dirname(__file__), "council_progress.md")
-    with open(log_file, "w", encoding="utf-8") as f:
+    with open(LOG_FILE, "w", encoding="utf-8") as f:
         f.write("# 🏛️ AI Council Live Status\n\n")
-    
-    def update_log(msg):
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(msg + "\n\n")
     
     if ctx:
         ctx.info("🏛️ The AI Council is assembling...")
@@ -295,14 +297,24 @@ async def consult_council(query: str, ctx: Context = None, history: Optional[Lis
         sys.stderr.flush()
         update_log(f"🧠 `[{model_name}]` started thinking...")
         
-        result = await coro
-        
-        if ctx:
-            ctx.info(f"✅ [{model_name}] has delivered its perspective!")
-        sys.stderr.write(f"✅ [{model_name}] has delivered its perspective!\n")
-        sys.stderr.flush()
-        update_log(f"✅ `[{model_name}]` has delivered its perspective!")
-        return result
+        try:
+            result = await coro
+            
+            # Check if the result string contains an API error block
+            if result and "Error" in result and result.startswith("###"):
+                update_log(f"❌ `[{model_name}]` encountered an API ERROR:\n```text\n{result}\n```")
+            else:
+                update_log(f"✅ `[{model_name}]` has delivered its perspective!")
+                
+            if ctx:
+                ctx.info(f"✅ [{model_name}] finished!")
+            sys.stderr.write(f"✅ [{model_name}] finished!\n")
+            sys.stderr.flush()
+            
+            return result
+        except Exception as e:
+            update_log(f"❌ `[{model_name}]` FATAL ERROR:\n```text\n{str(e)}\n```")
+            return f"### {model_name} Error\n{str(e)}"
     
     # Phase 1: Run queries in parallel
     tasks = []
