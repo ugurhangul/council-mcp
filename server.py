@@ -176,64 +176,19 @@ async def query_nvidia(messages: List[Dict[str, str]], model: str, thinking_mode
         data["temperature"] = 0.15
         data["seed"] = 42
 
-    data["stream"] = True
-    
-    _USE_COLOR = os.getenv("NO_COLOR") is None
-    _REASONING_COLOR = "\033[90m" if _USE_COLOR else ""
-    _RESET_COLOR = "\033[0m" if _USE_COLOR else ""
-    _CONTENT_COLOR = "\033[36m" if _USE_COLOR else "" # Cyan for NVIDIA content
-
     async with httpx.AsyncClient() as client:
         try:
-            async with client.stream("POST", "https://integrate.api.nvidia.com/v1/chat/completions", headers=headers, json=data, timeout=600.0) as resp:
-                resp.raise_for_status()
-                
-                content_acc = ""
-                reasoning_acc = ""
-                
-                log_file = os.path.join(os.path.dirname(__file__), "council_progress.md")
-                
-                with open(log_file, "a", encoding="utf-8") as lf:
-                    lf.write(f"\n\n--- 🧠 Streaming NVIDIA ({model}) ---\n\n")
-                    lf.flush()
-                    
-                    async for line in resp.aiter_lines():
-                        if line.startswith("data: "):
-                            line = line[6:].strip()
-                            if line == "[DONE]":
-                                break
-                            if not line:
-                                continue
-                            try:
-                                import json
-                                chunk = json.loads(line)
-                                if not chunk.get('choices'):
-                                    continue
-                                
-                                delta = chunk['choices'][0].get('delta', {})
-                                
-                                reasoning = delta.get('reasoning') or delta.get('reasoning_content', '')
-                                if reasoning:
-                                    reasoning_acc += reasoning
-                                    lf.write(reasoning)
-                                    lf.flush()
-                                    
-                                content = delta.get('content')
-                                if content is not None:
-                                    content_acc += content
-                                    lf.write(content)
-                                    lf.flush()
-                            except Exception:
-                                pass
-                                
-                    lf.write("\n\n--- ✅ NVIDIA Stream Complete ---\n\n")
-                    lf.flush()
-                
-                output = f"### NVIDIA NIM ({model}) Perspective\n"
-                if reasoning_acc:
-                    output += f"<reasoning>\n{reasoning_acc}\n</reasoning>\n\n"
-                output += content_acc
-                return output
+            resp = await client.post("https://integrate.api.nvidia.com/v1/chat/completions", headers=headers, json=data, timeout=600.0)
+            resp.raise_for_status()
+            message = resp.json()['choices'][0]['message']
+            content = message.get('content', '')
+            reasoning = message.get('reasoning_content', '') or message.get('reasoning', '')
+            
+            output = f"### NVIDIA NIM ({model}) Perspective\n"
+            if reasoning:
+                output += f"<reasoning>\n{reasoning}\n</reasoning>\n\n"
+            output += content
+            return output
         except httpx.HTTPStatusError as e:
             return f"### NVIDIA Error\nHTTP {e.response.status_code}: {e.response.text}"
         except Exception as e:
