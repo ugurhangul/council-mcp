@@ -235,18 +235,64 @@ async def consult_council(query: str, ctx: Context = None, history: Optional[Lis
     if history is None:
         history = []
         
+    # File ingestion pipeline
+    MAX_FILE_SIZE = 50_000  # 50KB per file to stay within token limits
+    LANG_MAP = {
+        ".py": "python", ".js": "javascript", ".ts": "typescript", ".tsx": "tsx",
+        ".jsx": "jsx", ".cs": "csharp", ".java": "java", ".go": "go",
+        ".rs": "rust", ".rb": "ruby", ".php": "php", ".swift": "swift",
+        ".kt": "kotlin", ".cpp": "cpp", ".c": "c", ".h": "c",
+        ".html": "html", ".css": "css", ".scss": "scss",
+        ".json": "json", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml",
+        ".xml": "xml", ".sql": "sql", ".sh": "bash", ".ps1": "powershell",
+        ".md": "markdown", ".txt": "text", ".env": "text", ".ini": "ini",
+        ".dockerfile": "dockerfile", ".tf": "hcl",
+    }
+    BINARY_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp",
+                         ".mp3", ".mp4", ".wav", ".avi", ".mov", ".pdf", ".zip",
+                         ".tar", ".gz", ".exe", ".dll", ".so", ".bin", ".woff", ".woff2"}
+    
     file_contents = ""
     if files:
+        import glob as glob_mod
+        
+        # Expand globs and directories into individual file paths
+        expanded_paths = []
         for file_path in files:
-            if os.path.exists(file_path):
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                        file_contents += f"\n\n--- Content of {os.path.basename(file_path)} ---\n{content}\n"
-                except Exception as e:
-                    file_contents += f"\n\n--- Could not read {file_path}: {str(e)} ---\n"
+            if "*" in file_path or "?" in file_path:
+                expanded_paths.extend(glob_mod.glob(file_path, recursive=True))
+            elif os.path.isdir(file_path):
+                for root, _, filenames in os.walk(file_path):
+                    for fname in filenames:
+                        expanded_paths.append(os.path.join(root, fname))
             else:
+                expanded_paths.append(file_path)
+        
+        for file_path in expanded_paths:
+            ext = os.path.splitext(file_path)[1].lower()
+            
+            if ext in BINARY_EXTENSIONS:
+                file_contents += f"\n\n--- Skipped binary file: {os.path.basename(file_path)} ---\n"
+                continue
+                
+            if not os.path.exists(file_path):
                 file_contents += f"\n\n--- File not found: {file_path} ---\n"
+                continue
+                
+            try:
+                file_size = os.path.getsize(file_path)
+                if file_size > MAX_FILE_SIZE:
+                    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read(MAX_FILE_SIZE)
+                    content += f"\n\n... [TRUNCATED — file is {file_size:,} bytes, showing first {MAX_FILE_SIZE:,}] ..."
+                else:
+                    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+                
+                lang = LANG_MAP.get(ext, "")
+                file_contents += f"\n\n--- {os.path.basename(file_path)} ({file_size:,} bytes) ---\n```{lang}\n{content}\n```\n"
+            except Exception as e:
+                file_contents += f"\n\n--- Could not read {file_path}: {str(e)} ---\n"
                 
     if file_contents:
         query = f"{query}\n\nHere are the attached files for context:{file_contents}"
