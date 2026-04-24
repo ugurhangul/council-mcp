@@ -124,10 +124,11 @@ async def query_ollama_cloud(messages: List[Dict[str, str]]) -> str:
 
 
 @mcp.tool()
-async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = None, synthesize_consensus: bool = False) -> str:
+async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = None, synthesize_consensus: bool = False, model_roles: Optional[Dict[str, str]] = None) -> str:
     """Consult other AI models (ChatGPT, Claude, Gemini) for their perspectives. 
     Use history parameter for conversational memory (list of dicts with 'role' and 'content').
-    Set synthesize_consensus to True for the models to do a second round of debate and provide a final synthesis."""
+    Set synthesize_consensus to True for the models to do a second round of debate and provide a final synthesis.
+    Use model_roles to assign personas (e.g. {"openai": "Devil's Advocate", "anthropic": "Code Reviewer"}). Valid keys: openai, anthropic, gemini, ollama_local, ollama_secondary."""
     
     if history is None:
         history = []
@@ -135,13 +136,25 @@ async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = 
     messages = history.copy()
     messages.append({"role": "user", "content": query})
     
+    if model_roles is None:
+        model_roles = {}
+        
+    def get_messages_for_model(model_id: str):
+        custom_role = model_roles.get(model_id)
+        if not custom_role:
+            return messages
+        msgs = messages.copy()
+        instruction = f"[COUNCIL ROLE ASSIGNMENT: You are acting as the {custom_role}. Please adopt this specific perspective for your response.]\n\n"
+        msgs[-1] = {"role": "user", "content": instruction + msgs[-1]["content"]}
+        return msgs
+    
     # Phase 1: Run queries in parallel
     tasks = [
-        query_openai(messages),
-        query_anthropic(messages),
-        query_gemini(messages),
-        query_ollama(messages),
-        query_ollama_cloud(messages)
+        query_openai(get_messages_for_model("openai")),
+        query_anthropic(get_messages_for_model("anthropic")),
+        query_gemini(get_messages_for_model("gemini")),
+        query_ollama(get_messages_for_model("ollama_local")),
+        query_ollama_cloud(get_messages_for_model("ollama_secondary"))
     ]
     results = await asyncio.gather(*tasks)
     
@@ -160,7 +173,8 @@ async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = 
             f"<query>\n{query}\n</query>\n\n"
             "Here are the perspectives provided by various AI models on the council:\n"
             f"<perspectives>\n{combined_perspectives}\n</perspectives>\n\n"
-            "Please act as the council leader. Synthesize these perspectives, resolve any conflicts, and provide a final, definitive consensus answer to the user's query."
+            "Please act as the council leader. Synthesize these perspectives, resolve any conflicts, and provide a final, definitive consensus answer to the user's query.\n"
+            "CRITICAL REQUIREMENT: You must include a section titled '🔥 Disagreement Heatmap' where you explicitly list out any specific facts, logic, or opinions where the models disagreed. If there is high disagreement on a point, heavily warn the user!"
         )
         
         # We append this follow-up as a new user message for the consensus round
