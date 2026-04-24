@@ -124,11 +124,12 @@ async def query_ollama_cloud(messages: List[Dict[str, str]]) -> str:
 
 
 @mcp.tool()
-async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = None, synthesize_consensus: bool = False, model_roles: Optional[Dict[str, str]] = None) -> str:
+async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = None, synthesize_consensus: bool = False, model_roles: Optional[Dict[str, str]] = None, target_models: Optional[List[str]] = None) -> str:
     """Consult other AI models (ChatGPT, Claude, Gemini) for their perspectives. 
     Use history parameter for conversational memory (list of dicts with 'role' and 'content').
     Set synthesize_consensus to True for the models to do a second round of debate and provide a final synthesis.
-    Use model_roles to assign personas (e.g. {"openai": "Devil's Advocate", "anthropic": "Code Reviewer"}). Valid keys: openai, anthropic, gemini, ollama_local, ollama_secondary."""
+    Use model_roles to assign personas (e.g. {"openai": "Devil's Advocate"}). Valid keys: openai, anthropic, gemini, ollama_local, ollama_secondary.
+    Use target_models to route the query to specific models only (e.g. ["ollama_local", "gemini"]). If None, queries all models."""
     
     if history is None:
         history = []
@@ -149,13 +150,20 @@ async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = 
         return msgs
     
     # Phase 1: Run queries in parallel
-    tasks = [
-        query_openai(get_messages_for_model("openai")),
-        query_anthropic(get_messages_for_model("anthropic")),
-        query_gemini(get_messages_for_model("gemini")),
-        query_ollama(get_messages_for_model("ollama_local")),
-        query_ollama_cloud(get_messages_for_model("ollama_secondary"))
-    ]
+    tasks = []
+    if target_models is None or "openai" in target_models:
+        tasks.append(query_openai(get_messages_for_model("openai")))
+    if target_models is None or "anthropic" in target_models:
+        tasks.append(query_anthropic(get_messages_for_model("anthropic")))
+    if target_models is None or "gemini" in target_models:
+        tasks.append(query_gemini(get_messages_for_model("gemini")))
+    if target_models is None or "ollama_local" in target_models:
+        tasks.append(query_ollama(get_messages_for_model("ollama_local")))
+    if target_models is None or "ollama_secondary" in target_models:
+        tasks.append(query_ollama_cloud(get_messages_for_model("ollama_secondary")))
+        
+    if not tasks:
+        return "Error: target_models list is empty or contains invalid model names."
     results = await asyncio.gather(*tasks)
     
     # Filter out None results (where API keys weren't configured)
@@ -181,13 +189,17 @@ async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = 
         synthesis_messages = messages.copy()
         synthesis_messages[-1] = {"role": "user", "content": consensus_prompt}
         
-        synthesis_tasks = [
-            query_openai(synthesis_messages),
-            query_anthropic(synthesis_messages),
-            query_gemini(synthesis_messages),
-            query_ollama(synthesis_messages),
-            query_ollama_cloud(synthesis_messages)
-        ]
+        synthesis_tasks = []
+        if target_models is None or "openai" in target_models:
+            synthesis_tasks.append(query_openai(synthesis_messages))
+        if target_models is None or "anthropic" in target_models:
+            synthesis_tasks.append(query_anthropic(synthesis_messages))
+        if target_models is None or "gemini" in target_models:
+            synthesis_tasks.append(query_gemini(synthesis_messages))
+        if target_models is None or "ollama_local" in target_models:
+            synthesis_tasks.append(query_ollama(synthesis_messages))
+        if target_models is None or "ollama_secondary" in target_models:
+            synthesis_tasks.append(query_ollama_cloud(synthesis_messages))
         synthesis_results = await asyncio.gather(*synthesis_tasks)
         valid_synthesis = [r for r in synthesis_results if r is not None]
         
