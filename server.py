@@ -231,16 +231,26 @@ async def consult_council(query: str, ctx: Context = None, history: Optional[Lis
     
     import sys
     
+    log_file = os.path.join(os.path.dirname(__file__), "council_progress.md")
+    with open(log_file, "w", encoding="utf-8") as f:
+        f.write("# 🏛️ AI Council Live Status\n\n")
+    
+    def update_log(msg):
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(msg + "\n\n")
+    
     if ctx:
         ctx.info("🏛️ The AI Council is assembling...")
     sys.stderr.write("🏛️ The AI Council is assembling...\n")
     sys.stderr.flush()
+    update_log("⏳ **The AI Council is assembling...**")
         
     async def fetch_and_notify(model_name: str, coro):
         if ctx:
             ctx.info(f"🧠 [{model_name}] started thinking...")
         sys.stderr.write(f"🧠 [{model_name}] started thinking...\n")
         sys.stderr.flush()
+        update_log(f"🧠 `[{model_name}]` started thinking...")
         
         result = await coro
         
@@ -248,6 +258,7 @@ async def consult_council(query: str, ctx: Context = None, history: Optional[Lis
             ctx.info(f"✅ [{model_name}] has delivered its perspective!")
         sys.stderr.write(f"✅ [{model_name}] has delivered its perspective!\n")
         sys.stderr.flush()
+        update_log(f"✅ `[{model_name}]` has delivered its perspective!")
         return result
     
     # Phase 1: Run queries in parallel
@@ -306,6 +317,7 @@ async def consult_council(query: str, ctx: Context = None, history: Optional[Lis
             ctx.info("⚖️ The Council is reviewing all perspectives for synthesis...")
         sys.stderr.write("⚖️ The Council is reviewing all perspectives for synthesis...\n")
         sys.stderr.flush()
+        update_log("⚖️ **The Council is reviewing all perspectives for synthesis...**")
             
         synthesis_tasks = []
         if (target_models is None or "openai" in target_models) and not disable_cloud:
