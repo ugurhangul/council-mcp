@@ -94,10 +94,8 @@ async def query_ollama_cloud(prompt: str) -> str:
     if not model:
         return None
     
-    host = os.getenv("OLLAMA_CLOUD_HOST")
-    if not host:
-        return None
-        
+    host = os.getenv("OLLAMA_CLOUD_HOST", "http://localhost:11434")
+
     url = f"{host.rstrip('/')}/api/chat"
     data = {
         "model": model,
@@ -115,9 +113,9 @@ async def query_ollama_cloud(prompt: str) -> str:
         try:
             resp = await client.post(url, headers=headers, json=data, timeout=90.0)
             resp.raise_for_status()
-            return f"### Ollama Cloud ({model}) Perspective\n{resp.json()['message']['content']}"
+            return f"### Ollama Secondary ({model}) Perspective\n{resp.json()['message']['content']}"
         except Exception as e:
-            return f"### Ollama Cloud Error\n{str(e)}"
+            return f"### Ollama Secondary Error\n{str(e)}"
 
 @mcp.tool()
 async def consult_council(query: str) -> str:
