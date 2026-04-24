@@ -160,6 +160,10 @@ async def query_nvidia(messages: List[Dict[str, str]]) -> str:
             "enable_thinking": True,
             "clear_thinking": False
         }
+    elif "mistral" in model.lower() or "devstral" in model.lower():
+        data["max_tokens"] = 8192
+        data["temperature"] = 0.15
+        data["seed"] = 42
 
     async with httpx.AsyncClient() as client:
         try:
