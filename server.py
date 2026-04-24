@@ -191,40 +191,43 @@ async def query_nvidia(messages: List[Dict[str, str]], model: str, thinking_mode
                 content_acc = ""
                 reasoning_acc = ""
                 
-                sys.stderr.write(f"\n--- 🧠 Streaming NVIDIA ({model}) ---\n")
-                sys.stderr.flush()
+                log_file = os.path.join(os.path.dirname(__file__), "council_progress.md")
                 
-                async for line in resp.aiter_lines():
-                    if line.startswith("data: "):
-                        line = line[6:].strip()
-                        if line == "[DONE]":
-                            break
-                        if not line:
-                            continue
-                        try:
-                            import json
-                            chunk = json.loads(line)
-                            if not chunk.get('choices'):
+                with open(log_file, "a", encoding="utf-8") as lf:
+                    lf.write(f"\n\n--- 🧠 Streaming NVIDIA ({model}) ---\n\n")
+                    lf.flush()
+                    
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data: "):
+                            line = line[6:].strip()
+                            if line == "[DONE]":
+                                break
+                            if not line:
                                 continue
-                            
-                            delta = chunk['choices'][0].get('delta', {})
-                            
-                            reasoning = delta.get('reasoning') or delta.get('reasoning_content', '')
-                            if reasoning:
-                                reasoning_acc += reasoning
-                                sys.stderr.write(f"{_REASONING_COLOR}{reasoning}{_RESET_COLOR}")
-                                sys.stderr.flush()
+                            try:
+                                import json
+                                chunk = json.loads(line)
+                                if not chunk.get('choices'):
+                                    continue
                                 
-                            content = delta.get('content')
-                            if content is not None:
-                                content_acc += content
-                                sys.stderr.write(f"{_CONTENT_COLOR}{content}{_RESET_COLOR}")
-                                sys.stderr.flush()
-                        except Exception:
-                            pass
-                            
-                sys.stderr.write("\n--- ✅ NVIDIA Stream Complete ---\n\n")
-                sys.stderr.flush()
+                                delta = chunk['choices'][0].get('delta', {})
+                                
+                                reasoning = delta.get('reasoning') or delta.get('reasoning_content', '')
+                                if reasoning:
+                                    reasoning_acc += reasoning
+                                    lf.write(reasoning)
+                                    lf.flush()
+                                    
+                                content = delta.get('content')
+                                if content is not None:
+                                    content_acc += content
+                                    lf.write(content)
+                                    lf.flush()
+                            except Exception:
+                                pass
+                                
+                    lf.write("\n\n--- ✅ NVIDIA Stream Complete ---\n\n")
+                    lf.flush()
                 
                 output = f"### NVIDIA NIM ({model}) Perspective\n"
                 if reasoning_acc:
