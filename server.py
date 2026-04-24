@@ -226,17 +226,20 @@ async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = 
         msgs[-1] = {"role": "user", "content": instruction + msgs[-1]["content"]}
         return msgs
     
+    disable_local = os.getenv("DISABLE_LOCAL", "").lower() == "true"
+    disable_cloud = os.getenv("DISABLE_CLOUD", "").lower() == "true"
+    
     # Phase 1: Run queries in parallel
     tasks = []
-    if target_models is None or "openai" in target_models:
+    if (target_models is None or "openai" in target_models) and not disable_cloud:
         tasks.append(query_openai(get_messages_for_model("openai")))
-    if target_models is None or "anthropic" in target_models:
+    if (target_models is None or "anthropic" in target_models) and not disable_cloud:
         tasks.append(query_anthropic(get_messages_for_model("anthropic")))
-    if target_models is None or "gemini" in target_models:
+    if (target_models is None or "gemini" in target_models) and not disable_cloud:
         tasks.append(query_gemini(get_messages_for_model("gemini")))
-    if target_models is None or "ollama_local" in target_models:
+    if (target_models is None or "ollama_local" in target_models) and not disable_local:
         tasks.append(query_ollama(get_messages_for_model("ollama_local")))
-    if target_models is None or "ollama_secondary" in target_models:
+    if (target_models is None or "ollama_secondary" in target_models) and not disable_cloud:
         tasks.append(query_ollama_cloud(get_messages_for_model("ollama_secondary")))
         
     nvidia_models_str = os.getenv("NVIDIA_MODELS")
@@ -248,7 +251,7 @@ async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = 
         
     for i, model in enumerate(nvidia_models_list):
         slot_name = f"nvidia_{i+1}" if len(nvidia_models_list) > 1 else "nvidia"
-        if target_models is None or slot_name in target_models:
+        if (target_models is None or slot_name in target_models) and not disable_cloud:
             tasks.append(query_nvidia(get_messages_for_model(slot_name), model))
             
     if not tasks:
@@ -279,20 +282,20 @@ async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = 
         synthesis_messages[-1] = {"role": "user", "content": consensus_prompt}
         
         synthesis_tasks = []
-        if target_models is None or "openai" in target_models:
+        if (target_models is None or "openai" in target_models) and not disable_cloud:
             synthesis_tasks.append(query_openai(synthesis_messages))
-        if target_models is None or "anthropic" in target_models:
+        if (target_models is None or "anthropic" in target_models) and not disable_cloud:
             synthesis_tasks.append(query_anthropic(synthesis_messages))
-        if target_models is None or "gemini" in target_models:
+        if (target_models is None or "gemini" in target_models) and not disable_cloud:
             synthesis_tasks.append(query_gemini(synthesis_messages))
-        if target_models is None or "ollama_local" in target_models:
+        if (target_models is None or "ollama_local" in target_models) and not disable_local:
             synthesis_tasks.append(query_ollama(synthesis_messages))
-        if target_models is None or "ollama_secondary" in target_models:
+        if (target_models is None or "ollama_secondary" in target_models) and not disable_cloud:
             synthesis_tasks.append(query_ollama_cloud(synthesis_messages))
             
         for i, model in enumerate(nvidia_models_list):
             slot_name = f"nvidia_{i+1}" if len(nvidia_models_list) > 1 else "nvidia"
-            if target_models is None or slot_name in target_models:
+            if (target_models is None or slot_name in target_models) and not disable_cloud:
                 synthesis_tasks.append(query_nvidia(synthesis_messages, model))
                 
         synthesis_results = await asyncio.gather(*synthesis_tasks)
@@ -308,6 +311,14 @@ async def check_health() -> str:
     """Check the health and configuration of the LLM Council."""
     status = []
     
+    disable_local = os.getenv("DISABLE_LOCAL", "").lower() == "true"
+    disable_cloud = os.getenv("DISABLE_CLOUD", "").lower() == "true"
+
+    if disable_cloud:
+        status.append("🛑 CLOUD MODELS GLOBALLY DISABLED")
+    if disable_local:
+        status.append("🛑 LOCAL MODELS GLOBALLY DISABLED")
+        
     # Check OpenAI
     if os.getenv("OPENAI_API_KEY"):
         status.append("✅ OpenAI: Configured")
