@@ -146,12 +146,21 @@ async def query_nvidia(messages: List[Dict[str, str]]) -> str:
         "temperature": 1,
         "top_p": 0.95,
         "max_tokens": 16384,
-        "stream": False,
-        "chat_template_kwargs": {
+        "stream": False
+    }
+    
+    # Apply specific reasoning kwargs based on the model family
+    if "deepseek" in model.lower():
+        data["chat_template_kwargs"] = {
             "thinking": True,
             "reasoning_effort": "high"
         }
-    }
+    elif "glm" in model.lower():
+        data["chat_template_kwargs"] = {
+            "enable_thinking": True,
+            "clear_thinking": False
+        }
+
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.post("https://integrate.api.nvidia.com/v1/chat/completions", headers=headers, json=data, timeout=600.0)
