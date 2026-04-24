@@ -132,14 +132,52 @@ async def query_ollama_cloud(messages: List[Dict[str, str]]) -> str:
         except Exception as e:
             return f"### Ollama Secondary Error\n{str(e)}"
 
+async def query_nvidia(messages: List[Dict[str, str]]) -> str:
+    api_key = os.getenv("NVIDIA_API_KEY")
+    if not api_key:
+        return None
+    
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    model = os.getenv("NVIDIA_MODEL", "deepseek-ai/deepseek-v4-pro")
+    
+    data = {
+        "model": model,
+        "messages": messages,
+        "temperature": 1,
+        "top_p": 0.95,
+        "max_tokens": 16384,
+        "stream": False,
+        "chat_template_kwargs": {
+            "thinking": True,
+            "reasoning_effort": "high"
+        }
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post("https://integrate.api.nvidia.com/v1/chat/completions", headers=headers, json=data, timeout=600.0)
+            resp.raise_for_status()
+            message = resp.json()['choices'][0]['message']
+            content = message.get('content', '')
+            reasoning = message.get('reasoning_content', '')
+            
+            output = f"### NVIDIA NIM ({model}) Perspective\n"
+            if reasoning:
+                output += f"<reasoning>\n{reasoning}\n</reasoning>\n\n"
+            output += content
+            return output
+        except httpx.HTTPStatusError as e:
+            return f"### NVIDIA Error\nHTTP {e.response.status_code}: {e.response.text}"
+        except Exception as e:
+            return f"### NVIDIA Error\n{str(e)}"
+
 
 @mcp.tool()
 async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = None, synthesize_consensus: bool = False, model_roles: Optional[Dict[str, str]] = None, target_models: Optional[List[str]] = None, files: Optional[List[str]] = None) -> str:
-    """Consult other AI models (ChatGPT, Claude, Gemini) for their perspectives. 
+    """Consult other AI models (ChatGPT, Claude, Gemini, NVIDIA NIM) for their perspectives. 
     Use history parameter for conversational memory (list of dicts with 'role' and 'content').
     Set synthesize_consensus to True for the models to do a second round of debate and provide a final synthesis.
-    Use model_roles to assign personas (e.g. {"openai": "Devil's Advocate"}). Valid keys: openai, anthropic, gemini, ollama_local, ollama_secondary.
-    Use target_models to route the query to specific models only (e.g. ["ollama_local", "gemini"]). If None, queries all models.
+    Use model_roles to assign personas (e.g. {"openai": "Devil's Advocate"}). Valid keys: openai, anthropic, gemini, ollama_local, ollama_secondary, nvidia.
+    Use target_models to route the query to specific models only (e.g. ["nvidia", "gemini"]). If None, queries all models.
     Use files to pass an array of absolute file paths. The council will read and review their contents."""
     
     if history is None:
@@ -188,6 +226,8 @@ async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = 
         tasks.append(query_ollama(get_messages_for_model("ollama_local")))
     if target_models is None or "ollama_secondary" in target_models:
         tasks.append(query_ollama_cloud(get_messages_for_model("ollama_secondary")))
+    if target_models is None or "nvidia" in target_models:
+        tasks.append(query_nvidia(get_messages_for_model("nvidia")))
         
     if not tasks:
         return "Error: target_models list is empty or contains invalid model names."
@@ -227,6 +267,8 @@ async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = 
             synthesis_tasks.append(query_ollama(synthesis_messages))
         if target_models is None or "ollama_secondary" in target_models:
             synthesis_tasks.append(query_ollama_cloud(synthesis_messages))
+        if target_models is None or "nvidia" in target_models:
+            synthesis_tasks.append(query_nvidia(synthesis_messages))
         synthesis_results = await asyncio.gather(*synthesis_tasks)
         valid_synthesis = [r for r in synthesis_results if r is not None]
         
@@ -257,6 +299,13 @@ async def check_health() -> str:
         status.append("✅ Gemini: Configured (gemini-3-flash-preview)")
     else:
         status.append("❌ Gemini: Missing API Key")
+        
+    # Check NVIDIA NIM
+    if os.getenv("NVIDIA_API_KEY"):
+        nvidia_model = os.getenv("NVIDIA_MODEL", "deepseek-ai/deepseek-v4-pro")
+        status.append(f"✅ NVIDIA NIM: Configured ({nvidia_model})")
+    else:
+        status.append("❌ NVIDIA NIM: Missing API Key")
         
     # Check Ollama Local
     ollama_model = os.getenv("OLLAMA_MODEL")
