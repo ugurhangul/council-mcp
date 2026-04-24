@@ -2,7 +2,7 @@ import os
 import asyncio
 import httpx
 from typing import List, Dict, Optional
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Context
 from dotenv import load_dotenv
 
 # Load environment variables from .env file if it exists
@@ -184,7 +184,7 @@ async def query_nvidia(messages: List[Dict[str, str]], model: str) -> str:
 
 
 @mcp.tool()
-async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = None, synthesize_consensus: bool = False, model_roles: Optional[Dict[str, str]] = None, target_models: Optional[List[str]] = None, files: Optional[List[str]] = None) -> str:
+async def consult_council(query: str, ctx: Context = None, history: Optional[List[Dict[str, str]]] = None, synthesize_consensus: bool = False, model_roles: Optional[Dict[str, str]] = None, target_models: Optional[List[str]] = None, files: Optional[List[str]] = None) -> str:
     """Consult other AI models (ChatGPT, Claude, Gemini, NVIDIA NIM) for their perspectives. 
     Use history parameter for conversational memory (list of dicts with 'role' and 'content').
     Set synthesize_consensus to True for the models to do a second round of debate and provide a final synthesis.
@@ -229,18 +229,29 @@ async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = 
     disable_local = os.getenv("DISABLE_LOCAL", "").lower() == "true"
     disable_cloud = os.getenv("DISABLE_CLOUD", "").lower() == "true"
     
+    if ctx:
+        ctx.info("🏛️ The AI Council is assembling...")
+        
+    async def fetch_and_notify(model_name: str, coro):
+        if ctx:
+            ctx.info(f"🧠 [{model_name}] started thinking...")
+        result = await coro
+        if ctx:
+            ctx.info(f"✅ [{model_name}] has delivered its perspective!")
+        return result
+    
     # Phase 1: Run queries in parallel
     tasks = []
     if (target_models is None or "openai" in target_models) and not disable_cloud:
-        tasks.append(query_openai(get_messages_for_model("openai")))
+        tasks.append(fetch_and_notify("OpenAI", query_openai(get_messages_for_model("openai"))))
     if (target_models is None or "anthropic" in target_models) and not disable_cloud:
-        tasks.append(query_anthropic(get_messages_for_model("anthropic")))
+        tasks.append(fetch_and_notify("Anthropic", query_anthropic(get_messages_for_model("anthropic"))))
     if (target_models is None or "gemini" in target_models) and not disable_cloud:
-        tasks.append(query_gemini(get_messages_for_model("gemini")))
+        tasks.append(fetch_and_notify("Gemini", query_gemini(get_messages_for_model("gemini"))))
     if (target_models is None or "ollama_local" in target_models) and not disable_local:
-        tasks.append(query_ollama(get_messages_for_model("ollama_local")))
+        tasks.append(fetch_and_notify("Ollama Local", query_ollama(get_messages_for_model("ollama_local"))))
     if (target_models is None or "ollama_secondary" in target_models) and not disable_cloud:
-        tasks.append(query_ollama_cloud(get_messages_for_model("ollama_secondary")))
+        tasks.append(fetch_and_notify("Ollama Cloud", query_ollama_cloud(get_messages_for_model("ollama_secondary"))))
         
     nvidia_models_str = os.getenv("NVIDIA_MODELS")
     nvidia_models_list = []
@@ -252,7 +263,7 @@ async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = 
     for i, model in enumerate(nvidia_models_list):
         slot_name = f"nvidia_{i+1}" if len(nvidia_models_list) > 1 else "nvidia"
         if (target_models is None or slot_name in target_models) and not disable_cloud:
-            tasks.append(query_nvidia(get_messages_for_model(slot_name), model))
+            tasks.append(fetch_and_notify(f"NVIDIA {model}", query_nvidia(get_messages_for_model(slot_name), model)))
             
     if not tasks:
         return "Error: target_models list is empty or contains invalid model names."
@@ -281,22 +292,25 @@ async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = 
         synthesis_messages = messages.copy()
         synthesis_messages[-1] = {"role": "user", "content": consensus_prompt}
         
+        if ctx:
+            ctx.info("⚖️ The Council is reviewing all perspectives for synthesis...")
+            
         synthesis_tasks = []
         if (target_models is None or "openai" in target_models) and not disable_cloud:
-            synthesis_tasks.append(query_openai(synthesis_messages))
+            synthesis_tasks.append(fetch_and_notify("OpenAI (Synthesis)", query_openai(synthesis_messages)))
         if (target_models is None or "anthropic" in target_models) and not disable_cloud:
-            synthesis_tasks.append(query_anthropic(synthesis_messages))
+            synthesis_tasks.append(fetch_and_notify("Anthropic (Synthesis)", query_anthropic(synthesis_messages)))
         if (target_models is None or "gemini" in target_models) and not disable_cloud:
-            synthesis_tasks.append(query_gemini(synthesis_messages))
+            synthesis_tasks.append(fetch_and_notify("Gemini (Synthesis)", query_gemini(synthesis_messages)))
         if (target_models is None or "ollama_local" in target_models) and not disable_local:
-            synthesis_tasks.append(query_ollama(synthesis_messages))
+            synthesis_tasks.append(fetch_and_notify("Ollama Local (Synthesis)", query_ollama(synthesis_messages)))
         if (target_models is None or "ollama_secondary" in target_models) and not disable_cloud:
-            synthesis_tasks.append(query_ollama_cloud(synthesis_messages))
+            synthesis_tasks.append(fetch_and_notify("Ollama Cloud (Synthesis)", query_ollama_cloud(synthesis_messages)))
             
         for i, model in enumerate(nvidia_models_list):
             slot_name = f"nvidia_{i+1}" if len(nvidia_models_list) > 1 else "nvidia"
             if (target_models is None or slot_name in target_models) and not disable_cloud:
-                synthesis_tasks.append(query_nvidia(synthesis_messages, model))
+                synthesis_tasks.append(fetch_and_notify(f"NVIDIA {model} (Synthesis)", query_nvidia(synthesis_messages, model)))
                 
         synthesis_results = await asyncio.gather(*synthesis_tasks)
         valid_synthesis = [r for r in synthesis_results if r is not None]
