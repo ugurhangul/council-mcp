@@ -182,5 +182,66 @@ async def consult_council(query: str, history: Optional[List[Dict[str, str]]] = 
         
     return combined_perspectives
 
+@mcp.tool()
+async def check_health() -> str:
+    """Check the health and configuration of the LLM Council."""
+    status = []
+    
+    # Check OpenAI
+    if os.getenv("OPENAI_API_KEY"):
+        status.append("✅ OpenAI: Configured")
+    else:
+        status.append("❌ OpenAI: Missing API Key")
+        
+    # Check Anthropic
+    if os.getenv("ANTHROPIC_API_KEY"):
+        status.append("✅ Anthropic: Configured")
+    else:
+        status.append("❌ Anthropic: Missing API Key")
+        
+    # Check Gemini
+    if os.getenv("GEMINI_API_KEY"):
+        status.append("✅ Gemini: Configured (gemini-3-flash-preview)")
+    else:
+        status.append("❌ Gemini: Missing API Key")
+        
+    # Check Ollama Local
+    ollama_model = os.getenv("OLLAMA_MODEL")
+    if ollama_model:
+        host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"{host.rstrip('/')}/api/tags", timeout=3.0)
+                if resp.status_code == 200:
+                    status.append(f"✅ Ollama Local: Connected ({ollama_model})")
+                else:
+                    status.append(f"⚠️ Ollama Local: Configured ({ollama_model}) but host returned {resp.status_code}")
+        except Exception:
+            status.append(f"❌ Ollama Local: Configured ({ollama_model}) but host unreachable ({host})")
+    else:
+        status.append("➖ Ollama Local: Not Configured")
+        
+    # Check Ollama Secondary
+    cloud_model = os.getenv("OLLAMA_CLOUD_MODEL")
+    if cloud_model:
+        host = os.getenv("OLLAMA_CLOUD_HOST", "http://localhost:11434")
+        try:
+            async with httpx.AsyncClient() as client:
+                headers = {}
+                auth = os.getenv("OLLAMA_CLOUD_AUTH")
+                if auth:
+                    headers["Authorization"] = f"Bearer {auth}"
+                resp = await client.get(f"{host.rstrip('/')}/api/tags", headers=headers, timeout=3.0)
+                if resp.status_code == 200:
+                    status.append(f"✅ Ollama Secondary: Connected ({cloud_model})")
+                else:
+                    status.append(f"⚠️ Ollama Secondary: Configured ({cloud_model}) but host returned {resp.status_code}")
+        except Exception:
+            status.append(f"❌ Ollama Secondary: Configured ({cloud_model}) but host unreachable ({host})")
+    else:
+        status.append("➖ Ollama Secondary: Not Configured")
+
+    return "### Council Health Check\n\n" + "\n".join(status)
+
 if __name__ == "__main__":
     mcp.run()
