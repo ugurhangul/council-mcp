@@ -23,7 +23,7 @@ async def query_openai(messages: List[Dict[str, str]]) -> str:
     }
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data, timeout=90.0)
+            resp = await client.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data, timeout=600.0)
             resp.raise_for_status()
             return f"### OpenAI (GPT-4o) Perspective\n{resp.json()['choices'][0]['message']['content']}"
         except Exception as e:
@@ -46,7 +46,7 @@ async def query_anthropic(messages: List[Dict[str, str]]) -> str:
     }
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.post("https://api.anthropic.com/v1/messages", headers=headers, json=data, timeout=90.0)
+            resp = await client.post("https://api.anthropic.com/v1/messages", headers=headers, json=data, timeout=600.0)
             resp.raise_for_status()
             return f"### Anthropic (Claude 3.7) Perspective\n{resp.json()['content'][0]['text']}"
         except Exception as e:
@@ -69,7 +69,7 @@ async def query_gemini(messages: List[Dict[str, str]]) -> str:
     }
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.post(url, headers=headers, json=data, timeout=90.0)
+            resp = await client.post(url, headers=headers, json=data, timeout=600.0)
             resp.raise_for_status()
             return f"### Google (Gemini 3 Flash Preview) Perspective\n{resp.json()['candidates'][0]['content']['parts'][0]['text']}"
         except Exception as e:
@@ -89,7 +89,7 @@ async def query_ollama(messages: List[Dict[str, str]]) -> str:
     }
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.post(url, json=data, timeout=90.0)
+            resp = await client.post(url, json=data, timeout=600.0)
             resp.raise_for_status()
             return f"### Ollama ({model}) Perspective\n{resp.json()['message']['content']}"
         except Exception as e:
@@ -116,7 +116,7 @@ async def query_ollama_cloud(messages: List[Dict[str, str]]) -> str:
         
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.post(url, headers=headers, json=data, timeout=90.0)
+            resp = await client.post(url, headers=headers, json=data, timeout=600.0)
             resp.raise_for_status()
             return f"### Ollama Secondary ({model}) Perspective\n{resp.json()['message']['content']}"
         except Exception as e:
