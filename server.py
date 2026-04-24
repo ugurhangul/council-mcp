@@ -14,6 +14,9 @@ mcp = FastMCP("LLM Council")
 
 LOG_FILE = os.path.join(os.path.dirname(__file__), "council_progress.md")
 
+# Split timeouts: fail fast on connection (10s), allow long reads for thinking models (300s)
+API_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
+
 def update_log(msg: str):
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
@@ -31,11 +34,15 @@ async def query_openai(messages: List[Dict[str, str]]) -> str:
         "model": "gpt-4o",
         "messages": messages
     }
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
         try:
-            resp = await client.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data, timeout=600.0)
+            resp = await client.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data)
             resp.raise_for_status()
             return f"### OpenAI (GPT-4o) Perspective\n{resp.json()['choices'][0]['message']['content']}"
+        except httpx.ConnectError:
+            return f"### OpenAI Error\nConnection failed — server unreachable"
+        except httpx.TimeoutException as e:
+            return f"### OpenAI Error\nTimeout: {type(e).__name__}"
         except httpx.HTTPStatusError as e:
             return f"### OpenAI Error\nHTTP {e.response.status_code}: {e.response.text}"
         except Exception as e:
@@ -56,11 +63,15 @@ async def query_anthropic(messages: List[Dict[str, str]]) -> str:
         "max_tokens": 8192,
         "messages": messages
     }
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
         try:
-            resp = await client.post("https://api.anthropic.com/v1/messages", headers=headers, json=data, timeout=600.0)
+            resp = await client.post("https://api.anthropic.com/v1/messages", headers=headers, json=data)
             resp.raise_for_status()
             return f"### Anthropic (Claude 3.7) Perspective\n{resp.json()['content'][0]['text']}"
+        except httpx.ConnectError:
+            return f"### Anthropic Error\nConnection failed — server unreachable"
+        except httpx.TimeoutException as e:
+            return f"### Anthropic Error\nTimeout: {type(e).__name__}"
         except httpx.HTTPStatusError as e:
             return f"### Anthropic Error\nHTTP {e.response.status_code}: {e.response.text}"
         except Exception as e:
@@ -81,11 +92,15 @@ async def query_gemini(messages: List[Dict[str, str]]) -> str:
     data = {
         "contents": gemini_contents
     }
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
         try:
-            resp = await client.post(url, headers=headers, json=data, timeout=600.0)
+            resp = await client.post(url, headers=headers, json=data)
             resp.raise_for_status()
             return f"### Google (Gemini 3 Flash Preview) Perspective\n{resp.json()['candidates'][0]['content']['parts'][0]['text']}"
+        except httpx.ConnectError:
+            return f"### Gemini Error\nConnection failed — server unreachable"
+        except httpx.TimeoutException as e:
+            return f"### Gemini Error\nTimeout: {type(e).__name__}"
         except httpx.HTTPStatusError as e:
             return f"### Gemini Error\nHTTP {e.response.status_code}: {e.response.text}"
         except Exception as e:
@@ -103,11 +118,15 @@ async def query_ollama(messages: List[Dict[str, str]]) -> str:
         "messages": messages,
         "stream": False
     }
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
         try:
-            resp = await client.post(url, json=data, timeout=600.0)
+            resp = await client.post(url, json=data)
             resp.raise_for_status()
             return f"### Ollama ({model}) Perspective\n{resp.json()['message']['content']}"
+        except httpx.ConnectError:
+            return f"### Ollama Error\nConnection failed — is Ollama running at {host}?"
+        except httpx.TimeoutException as e:
+            return f"### Ollama Error\nTimeout: {type(e).__name__}"
         except httpx.HTTPStatusError as e:
             return f"### Ollama Error\nHTTP {e.response.status_code}: {e.response.text}"
         except Exception as e:
@@ -132,11 +151,15 @@ async def query_ollama_cloud(messages: List[Dict[str, str]]) -> str:
     if auth_token:
         headers["Authorization"] = f"Bearer {auth_token}"
         
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
         try:
-            resp = await client.post(url, headers=headers, json=data, timeout=600.0)
+            resp = await client.post(url, headers=headers, json=data)
             resp.raise_for_status()
             return f"### Ollama Secondary ({model}) Perspective\n{resp.json()['message']['content']}"
+        except httpx.ConnectError:
+            return f"### Ollama Secondary Error\nConnection failed — is cloud host reachable?"
+        except httpx.TimeoutException as e:
+            return f"### Ollama Secondary Error\nTimeout: {type(e).__name__}"
         except httpx.HTTPStatusError as e:
             return f"### Ollama Secondary Error\nHTTP {e.response.status_code}: {e.response.text}"
         except Exception as e:
@@ -176,9 +199,9 @@ async def query_nvidia(messages: List[Dict[str, str]], model: str, thinking_mode
         data["temperature"] = 0.15
         data["seed"] = 42
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
         try:
-            resp = await client.post("https://integrate.api.nvidia.com/v1/chat/completions", headers=headers, json=data, timeout=600.0)
+            resp = await client.post("https://integrate.api.nvidia.com/v1/chat/completions", headers=headers, json=data)
             resp.raise_for_status()
             message = resp.json()['choices'][0]['message']
             content = message.get('content', '')
@@ -189,6 +212,10 @@ async def query_nvidia(messages: List[Dict[str, str]], model: str, thinking_mode
                 output += f"<reasoning>\n{reasoning}\n</reasoning>\n\n"
             output += content
             return output
+        except httpx.ConnectError:
+            return f"### NVIDIA Error\nConnection failed — NVIDIA NIM unreachable"
+        except httpx.TimeoutException as e:
+            return f"### NVIDIA Error\nTimeout: {type(e).__name__}"
         except httpx.HTTPStatusError as e:
             return f"### NVIDIA Error\nHTTP {e.response.status_code}: {e.response.text}"
         except Exception as e:
