@@ -202,6 +202,12 @@ async def query_nvidia(messages: List[Dict[str, str]], model: str, thinking_mode
     async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
         try:
             resp = await client.post("https://integrate.api.nvidia.com/v1/chat/completions", headers=headers, json=data)
+            
+            # Detect queue — NVIDIA returns 202 when the model is overloaded
+            if resp.status_code == 202:
+                req_id = resp.headers.get("nvcf-reqid", "unknown")
+                return f"### NVIDIA NIM ({model}) — QUEUED, ABORTED\n⏳ Model is overloaded. Request was queued (ID: `{req_id}`). Skipping to avoid long wait."
+            
             resp.raise_for_status()
             message = resp.json()['choices'][0]['message']
             content = message.get('content', '')
