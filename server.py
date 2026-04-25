@@ -59,7 +59,7 @@ async def query_anthropic(messages: List[Dict[str, str]]) -> str:
         "content-type": "application/json"
     }
     data = {
-        "model": "claude-3-7-sonnet-20250219",
+        "model": "claude-haiku-4-5-20250414",
         "max_tokens": 8192,
         "messages": messages
     }
@@ -67,7 +67,7 @@ async def query_anthropic(messages: List[Dict[str, str]]) -> str:
         try:
             resp = await client.post("https://api.anthropic.com/v1/messages", headers=headers, json=data)
             resp.raise_for_status()
-            return f"### Anthropic (Claude 3.7) Perspective\n{resp.json()['content'][0]['text']}"
+            return f"### Anthropic (Claude Haiku 4.5) Perspective\n{resp.json()['content'][0]['text']}"
         except httpx.ConnectError:
             return f"### Anthropic Error\nConnection failed — server unreachable"
         except httpx.TimeoutException as e:
