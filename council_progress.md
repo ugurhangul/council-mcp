@@ -231,3 +231,15 @@ HTTP 503: {
 API returned error: Provider returned error
 ```
 
+❌ `[NVIDIA z-ai/glm-5.1 (Synthesis)]` encountered an API ERROR:
+```text
+### NVIDIA Error
+HTTP 504: 
+```
+
+❌ `[NVIDIA deepseek-ai/deepseek-v4-flash (Synthesis)]` encountered an API ERROR:
+```text
+### NVIDIA Error
+HTTP 504: 
+```
+

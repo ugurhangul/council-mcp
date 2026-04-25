@@ -113,6 +113,55 @@ async def query_gemini(messages: List[Dict[str, str]]) -> str:
         except Exception as e:
             return f"### Gemini Error\n{str(e)}"
 
+async def query_gemini_cli(messages: List[Dict[str, str]]) -> str:
+    enabled = os.getenv("GEMINI_CLI_ENABLED", "").lower() == "true"
+    if not enabled:
+        return None
+    
+    # Build prompt from the last user message, prepend history as context
+    prompt = messages[-1]["content"] if messages else ""
+    if not prompt:
+        return None
+    
+    if len(messages) > 1:
+        history_text = ""
+        for msg in messages[:-1]:
+            role = msg["role"].capitalize()
+            history_text += f"{role}: {msg['content']}\n\n"
+        prompt = f"Previous conversation:\n{history_text}\nCurrent question:\n{prompt}"
+    
+    gemini_cli_path = os.getenv("GEMINI_CLI_PATH", "gemini")
+    model = os.getenv("GEMINI_CLI_MODEL", "")
+    
+    cmd = [gemini_cli_path, "-p", prompt]
+    if model:
+        cmd.extend(["-m", model])
+    
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300.0)
+        
+        if proc.returncode != 0:
+            err_msg = stderr.decode("utf-8", errors="replace").strip()
+            return f"### Gemini CLI Error\nExit code {proc.returncode}: {err_msg}"
+        
+        output = stdout.decode("utf-8", errors="replace").strip()
+        if not output:
+            return f"### Gemini CLI Error\nEmpty response from subprocess"
+        
+        display = f"Gemini CLI ({model})" if model else "Gemini CLI"
+        return f"### {display} Perspective\n{output}"
+    except asyncio.TimeoutError:
+        return f"### Gemini CLI Error\nTimeout: subprocess exceeded 300s"
+    except FileNotFoundError:
+        return f"### Gemini CLI Error\n`gemini` command not found — install with: npm install -g @google/gemini-cli"
+    except Exception as e:
+        return f"### Gemini CLI Error\n{str(e)}"
+
 async def query_ollama(messages: List[Dict[str, str]]) -> str:
     model = os.getenv("OLLAMA_MODEL")
     if not model:
@@ -293,11 +342,11 @@ async def query_openrouter(messages: List[Dict[str, str]], model: str) -> str:
 
 @mcp.tool()
 async def consult_council(query: str, ctx: Context = None, history: Optional[List[Dict[str, str]]] = None, synthesize_consensus: bool = False, model_roles: Optional[Dict[str, str]] = None, target_models: Optional[List[str]] = None, files: Optional[List[str]] = None, thinking_mode: bool = True) -> str:
-    """Consult other AI models (ChatGPT, Claude, Gemini, NVIDIA NIM, OpenRouter) for their perspectives. 
+    """Consult other AI models (ChatGPT, Claude, Gemini, Gemini CLI, NVIDIA NIM, OpenRouter) for their perspectives. 
     Use history parameter for conversational memory (list of dicts with 'role' and 'content').
     Set synthesize_consensus to True for the models to do a second round of debate and provide a final synthesis.
-    Use model_roles to assign personas (e.g. {"openai": "Devil's Advocate"}). Valid keys: openai, anthropic, gemini, ollama_local, ollama_secondary, nvidia, openrouter.
-    Use target_models to route the query to specific models only (e.g. ["nvidia_1", "gemini", "openrouter_1"]). If None, queries all models.
+    Use model_roles to assign personas (e.g. {"openai": "Devil's Advocate"}). Valid keys: openai, anthropic, gemini, gemini_cli, ollama_local, ollama_secondary, nvidia, openrouter.
+    Use target_models to route the query to specific models only (e.g. ["nvidia_1", "gemini", "gemini_cli", "openrouter_1"]). If None, queries all models.
     Use files to pass an array of absolute file paths. The council will read and review their contents.
     Use thinking_mode=False to explicitly disable reasoning passes on complex models like DeepSeek to dramatically speed up inference."""
     
@@ -438,6 +487,8 @@ async def consult_council(query: str, ctx: Context = None, history: Optional[Lis
         tasks.append(fetch_and_notify("Anthropic", query_anthropic(get_messages_for_model("anthropic"))))
     if (target_models is None or "gemini" in target_models) and not disable_cloud:
         tasks.append(fetch_and_notify("Gemini", query_gemini(get_messages_for_model("gemini"))))
+    if (target_models is None or "gemini_cli" in target_models) and not disable_cloud:
+        tasks.append(fetch_and_notify("Gemini CLI", query_gemini_cli(get_messages_for_model("gemini_cli"))))
     if (target_models is None or "ollama_local" in target_models) and not disable_local:
         tasks.append(fetch_and_notify("Ollama Local", query_ollama(get_messages_for_model("ollama_local"))))
     if (target_models is None or "ollama_secondary" in target_models) and not disable_cloud:
@@ -508,6 +559,8 @@ async def consult_council(query: str, ctx: Context = None, history: Optional[Lis
             synthesis_tasks.append(fetch_and_notify("Anthropic (Synthesis)", query_anthropic(synthesis_messages)))
         if (target_models is None or "gemini" in target_models) and not disable_cloud:
             synthesis_tasks.append(fetch_and_notify("Gemini (Synthesis)", query_gemini(synthesis_messages)))
+        if (target_models is None or "gemini_cli" in target_models) and not disable_cloud:
+            synthesis_tasks.append(fetch_and_notify("Gemini CLI (Synthesis)", query_gemini_cli(synthesis_messages)))
         if (target_models is None or "ollama_local" in target_models) and not disable_local:
             synthesis_tasks.append(fetch_and_notify("Ollama Local (Synthesis)", query_ollama(synthesis_messages)))
         if (target_models is None or "ollama_secondary" in target_models) and not disable_cloud:
@@ -556,11 +609,31 @@ async def check_health() -> str:
     else:
         status.append("❌ Anthropic: Missing API Key")
         
-    # Check Gemini
+    # Check Gemini API
     if os.getenv("GEMINI_API_KEY"):
-        status.append(f"✅ Gemini: Configured ({GEMINI_MODEL})")
+        status.append(f"✅ Gemini API: Configured ({GEMINI_MODEL})")
     else:
-        status.append("❌ Gemini: Missing API Key")
+        status.append("❌ Gemini API: Missing API Key")
+        
+    # Check Gemini CLI
+    if os.getenv("GEMINI_CLI_ENABLED", "").lower() == "true":
+        gemini_cli_path = os.getenv("GEMINI_CLI_PATH", "gemini")
+        gemini_cli_model = os.getenv("GEMINI_CLI_MODEL", "default")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                gemini_cli_path, "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+            version = stdout.decode("utf-8", errors="replace").strip().split("\n")[0]
+            status.append(f"✅ Gemini CLI: Installed ({version}, model: {gemini_cli_model})")
+        except FileNotFoundError:
+            status.append(f"❌ Gemini CLI: Enabled but `{gemini_cli_path}` not found — install with: npm install -g @google/gemini-cli")
+        except Exception as e:
+            status.append(f"⚠️ Gemini CLI: Enabled but version check failed ({str(e)})")
+    else:
+        status.append("➖ Gemini CLI: Not Enabled (set GEMINI_CLI_ENABLED=true)")
         
     # Check NVIDIA NIM
     if os.getenv("NVIDIA_API_KEY"):
