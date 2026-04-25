@@ -221,14 +221,48 @@ async def query_nvidia(messages: List[Dict[str, str]], model: str, thinking_mode
         except Exception as e:
             return f"### NVIDIA Error\n{str(e)}"
 
+async def query_openrouter(messages: List[Dict[str, str]], model: str) -> str:
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        return None
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/ugurhangul/council-mcp",
+        "X-Title": "LLM Council"
+    }
+    
+    # Extract a short display name from the model id (e.g. "google/gemini-2.5-flash" -> "Gemini 2.5 Flash")
+    display_name = model.split("/")[-1].replace("-", " ").title() if "/" in model else model
+    
+    data = {
+        "model": model,
+        "messages": messages
+    }
+    
+    async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
+        try:
+            resp = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
+            resp.raise_for_status()
+            return f"### OpenRouter ({display_name}) Perspective\n{resp.json()['choices'][0]['message']['content']}"
+        except httpx.ConnectError:
+            return f"### OpenRouter Error ({model})\nConnection failed — OpenRouter unreachable"
+        except httpx.TimeoutException as e:
+            return f"### OpenRouter Error ({model})\nTimeout: {type(e).__name__}"
+        except httpx.HTTPStatusError as e:
+            return f"### OpenRouter Error ({model})\nHTTP {e.response.status_code}: {e.response.text}"
+        except Exception as e:
+            return f"### OpenRouter Error ({model})\n{str(e)}"
+
 
 @mcp.tool()
 async def consult_council(query: str, ctx: Context = None, history: Optional[List[Dict[str, str]]] = None, synthesize_consensus: bool = False, model_roles: Optional[Dict[str, str]] = None, target_models: Optional[List[str]] = None, files: Optional[List[str]] = None, thinking_mode: bool = True) -> str:
-    """Consult other AI models (ChatGPT, Claude, Gemini, NVIDIA NIM) for their perspectives. 
+    """Consult other AI models (ChatGPT, Claude, Gemini, NVIDIA NIM, OpenRouter) for their perspectives. 
     Use history parameter for conversational memory (list of dicts with 'role' and 'content').
     Set synthesize_consensus to True for the models to do a second round of debate and provide a final synthesis.
-    Use model_roles to assign personas (e.g. {"openai": "Devil's Advocate"}). Valid keys: openai, anthropic, gemini, ollama_local, ollama_secondary, nvidia.
-    Use target_models to route the query to specific models only (e.g. ["nvidia", "gemini"]). If None, queries all models.
+    Use model_roles to assign personas (e.g. {"openai": "Devil's Advocate"}). Valid keys: openai, anthropic, gemini, ollama_local, ollama_secondary, nvidia, openrouter.
+    Use target_models to route the query to specific models only (e.g. ["nvidia_1", "gemini", "openrouter_1"]). If None, queries all models.
     Use files to pass an array of absolute file paths. The council will read and review their contents.
     Use thinking_mode=False to explicitly disable reasoning passes on complex models like DeepSeek to dramatically speed up inference."""
     
@@ -374,6 +408,19 @@ async def consult_council(query: str, ctx: Context = None, history: Optional[Lis
         slot_name = f"nvidia_{i+1}" if len(nvidia_models_list) > 1 else "nvidia"
         if (target_models is None or slot_name in target_models) and not disable_cloud:
             tasks.append(fetch_and_notify(f"NVIDIA {model}", query_nvidia(get_messages_for_model(slot_name), model, thinking_mode)))
+    
+    # OpenRouter models
+    openrouter_models_str = os.getenv("OPENROUTER_MODELS")
+    openrouter_models_list = []
+    if openrouter_models_str:
+        openrouter_models_list = [m.strip() for m in openrouter_models_str.split(",") if m.strip()]
+    elif os.getenv("OPENROUTER_MODEL"):
+        openrouter_models_list = [os.getenv("OPENROUTER_MODEL")]
+        
+    for i, model in enumerate(openrouter_models_list):
+        slot_name = f"openrouter_{i+1}" if len(openrouter_models_list) > 1 else "openrouter"
+        if (target_models is None or slot_name in target_models) and not disable_cloud:
+            tasks.append(fetch_and_notify(f"OpenRouter {model}", query_openrouter(get_messages_for_model(slot_name), model)))
             
     if not tasks:
         return "Error: target_models list is empty or contains invalid model names."
@@ -424,6 +471,11 @@ async def consult_council(query: str, ctx: Context = None, history: Optional[Lis
             slot_name = f"nvidia_{i+1}" if len(nvidia_models_list) > 1 else "nvidia"
             if (target_models is None or slot_name in target_models) and not disable_cloud:
                 synthesis_tasks.append(fetch_and_notify(f"NVIDIA {model} (Synthesis)", query_nvidia(synthesis_messages, model, thinking_mode)))
+        
+        for i, model in enumerate(openrouter_models_list):
+            slot_name = f"openrouter_{i+1}" if len(openrouter_models_list) > 1 else "openrouter"
+            if (target_models is None or slot_name in target_models) and not disable_cloud:
+                synthesis_tasks.append(fetch_and_notify(f"OpenRouter {model} (Synthesis)", query_openrouter(synthesis_messages, model)))
                 
         synthesis_results = await asyncio.gather(*synthesis_tasks)
         valid_synthesis = [r for r in synthesis_results if r is not None]
@@ -512,6 +564,20 @@ async def check_health() -> str:
             status.append(f"❌ Ollama Secondary: Configured ({cloud_model}) but host unreachable ({host})")
     else:
         status.append("➖ Ollama Secondary: Not Configured")
+
+    # Check OpenRouter
+    if os.getenv("OPENROUTER_API_KEY"):
+        or_models_str = os.getenv("OPENROUTER_MODELS")
+        if or_models_str:
+            models = [m.strip() for m in or_models_str.split(",") if m.strip()]
+            for i, model in enumerate(models):
+                status.append(f"✅ OpenRouter {i+1}: Configured ({model})")
+        elif os.getenv("OPENROUTER_MODEL"):
+            status.append(f"✅ OpenRouter: Configured ({os.getenv('OPENROUTER_MODEL')})")
+        else:
+            status.append("⚠️ OpenRouter: API Key set but no models configured (set OPENROUTER_MODELS)")
+    else:
+        status.append("➖ OpenRouter: Not Configured")
 
     return "### Council Health Check\n\n" + "\n".join(status)
 
