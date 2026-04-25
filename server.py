@@ -16,6 +16,13 @@ LOG_FILE = os.path.join(os.path.dirname(__file__), "council_progress.md")
 
 # Split timeouts: fail fast on connection (10s), allow long reads for thinking models (300s)
 API_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
+# Extended timeout for deep-thinking NVIDIA models (GLM, DeepSeek reasoning) that can take 10+ minutes
+API_TIMEOUT_EXTENDED = httpx.Timeout(connect=10.0, read=600.0, write=10.0, pool=10.0)
+
+# Default model names — override via environment variables (set in mcp.json env block)
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20250414")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 
 def update_log(msg: str):
     try:
@@ -31,14 +38,14 @@ async def query_openai(messages: List[Dict[str, str]]) -> str:
     
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     data = {
-        "model": "gpt-4o",
+        "model": OPENAI_MODEL,
         "messages": messages
     }
     async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
         try:
             resp = await client.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data)
             resp.raise_for_status()
-            return f"### OpenAI (GPT-4o) Perspective\n{resp.json()['choices'][0]['message']['content']}"
+            return f"### OpenAI ({OPENAI_MODEL}) Perspective\n{resp.json()['choices'][0]['message']['content']}"
         except httpx.ConnectError:
             return f"### OpenAI Error\nConnection failed — server unreachable"
         except httpx.TimeoutException as e:
@@ -59,7 +66,7 @@ async def query_anthropic(messages: List[Dict[str, str]]) -> str:
         "content-type": "application/json"
     }
     data = {
-        "model": "claude-haiku-4-5-20250414",
+        "model": ANTHROPIC_MODEL,
         "max_tokens": 8192,
         "messages": messages
     }
@@ -67,7 +74,7 @@ async def query_anthropic(messages: List[Dict[str, str]]) -> str:
         try:
             resp = await client.post("https://api.anthropic.com/v1/messages", headers=headers, json=data)
             resp.raise_for_status()
-            return f"### Anthropic (Claude Haiku 4.5) Perspective\n{resp.json()['content'][0]['text']}"
+            return f"### Anthropic ({ANTHROPIC_MODEL}) Perspective\n{resp.json()['content'][0]['text']}"
         except httpx.ConnectError:
             return f"### Anthropic Error\nConnection failed — server unreachable"
         except httpx.TimeoutException as e:
@@ -87,7 +94,7 @@ async def query_gemini(messages: List[Dict[str, str]]) -> str:
         role = "model" if msg["role"] == "assistant" else "user"
         gemini_contents.append({"role": role, "parts": [{"text": msg["content"]}]})
         
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
     data = {
         "contents": gemini_contents
@@ -96,7 +103,7 @@ async def query_gemini(messages: List[Dict[str, str]]) -> str:
         try:
             resp = await client.post(url, headers=headers, json=data)
             resp.raise_for_status()
-            return f"### Google (Gemini 3 Flash Preview) Perspective\n{resp.json()['candidates'][0]['content']['parts'][0]['text']}"
+            return f"### Google ({GEMINI_MODEL}) Perspective\n{resp.json()['candidates'][0]['content']['parts'][0]['text']}"
         except httpx.ConnectError:
             return f"### Gemini Error\nConnection failed — server unreachable"
         except httpx.TimeoutException as e:
@@ -199,7 +206,10 @@ async def query_nvidia(messages: List[Dict[str, str]], model: str, thinking_mode
         data["temperature"] = 0.15
         data["seed"] = 42
 
-    async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
+    # Use extended timeout for thinking-mode models that produce long reasoning chains
+    timeout = API_TIMEOUT_EXTENDED if thinking_mode else API_TIMEOUT
+    
+    async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             resp = await client.post("https://integrate.api.nvidia.com/v1/chat/completions", headers=headers, json=data)
             
@@ -209,7 +219,13 @@ async def query_nvidia(messages: List[Dict[str, str]], model: str, thinking_mode
                 return f"### NVIDIA NIM ({model}) — QUEUED, ABORTED\n⏳ Model is overloaded. Request was queued (ID: `{req_id}`). Skipping to avoid long wait."
             
             resp.raise_for_status()
-            message = resp.json()['choices'][0]['message']
+            body = resp.json()
+            
+            # Defensive: ensure the response has the expected structure
+            if 'choices' not in body or not body['choices']:
+                return f"### NVIDIA Error ({model})\nUnexpected response — no 'choices' in payload:\n```json\n{resp.text[:500]}\n```"
+            
+            message = body['choices'][0]['message']
             content = message.get('content', '')
             reasoning = message.get('reasoning_content', '') or message.get('reasoning', '')
             
@@ -221,7 +237,7 @@ async def query_nvidia(messages: List[Dict[str, str]], model: str, thinking_mode
         except httpx.ConnectError:
             return f"### NVIDIA Error\nConnection failed — NVIDIA NIM unreachable"
         except httpx.TimeoutException as e:
-            return f"### NVIDIA Error\nTimeout: {type(e).__name__}"
+            return f"### NVIDIA Error ({model})\nTimeout: {type(e).__name__} — model may need thinking_mode=False"
         except httpx.HTTPStatusError as e:
             return f"### NVIDIA Error\nHTTP {e.response.status_code}: {e.response.text}"
         except Exception as e:
@@ -251,7 +267,20 @@ async def query_openrouter(messages: List[Dict[str, str]], model: str) -> str:
         try:
             resp = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
             resp.raise_for_status()
-            return f"### OpenRouter ({display_name}) Perspective\n{resp.json()['choices'][0]['message']['content']}"
+            body = resp.json()
+            
+            # OpenRouter free models sometimes return error objects without 'choices'
+            if 'choices' not in body or not body['choices']:
+                error_msg = body.get('error', {}).get('message', '') if isinstance(body.get('error'), dict) else str(body.get('error', ''))
+                if error_msg:
+                    return f"### OpenRouter Error ({model})\nAPI returned error: {error_msg}"
+                return f"### OpenRouter Error ({model})\nUnexpected response — no 'choices' in payload:\n```json\n{resp.text[:500]}\n```"
+            
+            content = body['choices'][0].get('message', {}).get('content', '')
+            if not content:
+                return f"### OpenRouter Error ({model})\nEmpty response from model (content was null/empty)"
+            
+            return f"### OpenRouter ({display_name}) Perspective\n{content}"
         except httpx.ConnectError:
             return f"### OpenRouter Error ({model})\nConnection failed — OpenRouter unreachable"
         except httpx.TimeoutException as e:
@@ -365,29 +394,40 @@ async def consult_council(query: str, ctx: Context = None, history: Optional[Lis
     update_log("⏳ **The AI Council is assembling...**")
         
     async def fetch_and_notify(model_name: str, coro):
+        import time
         if ctx:
             ctx.info(f"🧠 [{model_name}] started thinking...")
         sys.stderr.write(f"🧠 [{model_name}] started thinking...\n")
         sys.stderr.flush()
         update_log(f"🧠 `[{model_name}]` started thinking...")
         
+        start_time = time.monotonic()
+        
         try:
             result = await coro
+            elapsed = time.monotonic() - start_time
             
-            # Check if the result string contains an API error block
-            if result and "Error" in result and result.startswith("###"):
-                update_log(f"❌ `[{model_name}]` encountered an API ERROR:\n```text\n{result}\n```")
+            # Check only the first line for error markers to avoid false positives
+            # from valid responses that happen to contain "Error" in their body text
+            first_line = (result or "").split("\n")[0]
+            if result and "Error" in first_line and result.startswith("###"):
+                update_log(f"❌ `[{model_name}]` encountered an API ERROR ({elapsed:.1f}s):\n```text\n{result}\n```")
             else:
-                update_log(f"✅ `[{model_name}]` has delivered its perspective!")
+                update_log(f"✅ `[{model_name}]` has delivered its perspective! ({elapsed:.1f}s)")
                 
             if ctx:
-                ctx.info(f"✅ [{model_name}] finished!")
-            sys.stderr.write(f"✅ [{model_name}] finished!\n")
+                ctx.info(f"✅ [{model_name}] finished! ({elapsed:.1f}s)")
+            sys.stderr.write(f"✅ [{model_name}] finished! ({elapsed:.1f}s)\n")
             sys.stderr.flush()
             
             return result
+        except asyncio.TimeoutError:
+            elapsed = time.monotonic() - start_time
+            update_log(f"⏱️ `[{model_name}]` TIMED OUT after {elapsed:.1f}s")
+            return f"### {model_name} Error\nTimed out after {elapsed:.1f}s"
         except Exception as e:
-            update_log(f"❌ `[{model_name}]` FATAL ERROR:\n```text\n{str(e)}\n```")
+            elapsed = time.monotonic() - start_time
+            update_log(f"❌ `[{model_name}]` FATAL ERROR ({elapsed:.1f}s):\n```text\n{str(e)}\n```")
             return f"### {model_name} Error\n{str(e)}"
     
     # Phase 1: Run queries in parallel
@@ -506,19 +546,19 @@ async def check_health() -> str:
         
     # Check OpenAI
     if os.getenv("OPENAI_API_KEY"):
-        status.append("✅ OpenAI: Configured")
+        status.append(f"✅ OpenAI: Configured ({OPENAI_MODEL})")
     else:
         status.append("❌ OpenAI: Missing API Key")
         
     # Check Anthropic
     if os.getenv("ANTHROPIC_API_KEY"):
-        status.append("✅ Anthropic: Configured")
+        status.append(f"✅ Anthropic: Configured ({ANTHROPIC_MODEL})")
     else:
         status.append("❌ Anthropic: Missing API Key")
         
     # Check Gemini
     if os.getenv("GEMINI_API_KEY"):
-        status.append("✅ Gemini: Configured (gemini-3-flash-preview)")
+        status.append(f"✅ Gemini: Configured ({GEMINI_MODEL})")
     else:
         status.append("❌ Gemini: Missing API Key")
         
